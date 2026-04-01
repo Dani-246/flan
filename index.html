@@ -2,26 +2,27 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<title>Manga Flan V8</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Manga Flan - Full Editor</title>
 <style>
-body{margin:0; font-family:Arial; background:#111; color:white; user-select:none; overflow:hidden;}
-.header{background:linear-gradient(90deg,#ffb347,#ffcc33);padding:12px;font-size:22px;font-weight:bold;color:black;}
-.toolbar{display:flex; flex-wrap:wrap; gap:6px; padding:10px; background:#222;}
-button{padding:6px 10px; background:#333; border:none; color:white; cursor:pointer; border-radius:6px;}
-button.active{background:#ffb347;color:black;}
-input[type=color]{width:36px;height:36px;border:none;}
+body{margin:0; background:#111; color:white; font-family:Arial; user-select:none; overflow:hidden;}
+.header{background:linear-gradient(90deg,#ffb347,#ffcc33); padding:12px; text-align:center; font-weight:bold; font-size:22px; color:black;}
+.toolbar{display:flex; flex-wrap:wrap; gap:6px; padding:10px; background:#222; justify-content:center;}
+button{padding:6px 10px; border:none; border-radius:6px; background:#333; color:white; cursor:pointer;}
+button.active{background:#ffb347; color:black;}
+input[type=color]{width:36px; height:36px; border:none;}
 input[type=range]{width:100px;}
-.main{display:flex; flex-direction:column; height:calc(100vh-110px);}
-.canvas-wrapper{flex:1; display:flex; justify-content:center; align-items:center; background:#1a1a1a; overflow:hidden; position:relative; touch-action:none;}
-canvas{background:white; box-shadow:0 0 15px black; touch-action:none;}
+.main{display:flex; flex-direction:column; height:calc(100vh - 110px);}
+.canvas-wrapper{flex:1; position:relative; background:#1a1a1a; overflow:hidden;}
+canvas{background:white; display:block; margin:0 auto; box-shadow:0 0 10px black; touch-action:none;}
 .pages{height:100px; background:#222; display:flex; gap:8px; padding:8px; overflow-x:auto;}
 .thumb{min-width:80px; height:100px; background:white; border:2px solid transparent; cursor:pointer;}
 .thumb.active{border:2px solid #ffcc33;}
 </style>
 </head>
 <body>
-<div class="header">🍮 Manga Flan V8</div>
+
+<div class="header">🍮 Manga Flan</div>
 
 <div class="toolbar">
 <button onclick="setTool('brush')">🖌️ Pincel</button>
@@ -56,24 +57,29 @@ const canvas=document.getElementById('canvas'), ctx=canvas.getContext('2d');
 const color=document.getElementById('color'), size=document.getElementById('size');
 const pagesUI=document.getElementById('pages');
 
-let tool='brush', drawing=false, startX, startY, tempImage=null;
-let scale=1, pan={x:0,y:0}, isPanning=false, panStart={x:0,y:0};
-let pages=[], currentPage=0, history=[], redoStack=[];
-let objects=[], panels=[];
-let selectedObj=null, offset={x:0,y:0};
-let lastPos={x:0,y:0};
+let tool='brush', drawing=false, startX, startY;
+let scale=1, pan={x:0,y:0}, selectedObj=null, offset={x:0,y:0};
+let history=[], redoStack=[];
+let pages=[], currentPage=0;
 
-// ===== TOOLS =====
+// ===== PAGE STRUCTURE =====
+function createPage(){return {shapes:[], objects:[], panels:[]};}
+pages.push(createPage());
+
+// ===== TOOL =====
 function setTool(t){tool=t;}
-function saveState(){history.push(canvas.toDataURL()); if(history.length>50) history.shift(); redoStack=[];}
-function undo(){if(history.length===0)return; redoStack.push(canvas.toDataURL()); let img=new Image(); img.src=history.pop(); img.onload=()=>{ctx.clearRect(0,0,canvas.width,canvas.height); ctx.drawImage(img,0,0); drawPanels(); drawObjects();}}
-function redo(){if(redoStack.length===0)return; history.push(canvas.toDataURL()); let img=new Image(); img.src=redoStack.pop(); img.onload=()=>{ctx.clearRect(0,0,canvas.width,canvas.height); ctx.drawImage(img,0,0); drawPanels(); drawObjects();}}
 
-// ===== MOUSE & TOUCH EVENTS =====
+// ===== HISTORY =====
+function saveState(){const p=pages[currentPage]; history.push(JSON.parse(JSON.stringify(p))); if(history.length>50) history.shift(); redoStack=[];}
+function undo(){if(history.length===0) return; redoStack.push(JSON.parse(JSON.stringify(pages[currentPage]))); pages[currentPage]=history.pop(); redraw();}
+function redo(){if(redoStack.length===0) return; history.push(JSON.parse(JSON.stringify(pages[currentPage]))); pages[currentPage]=redoStack.pop(); redraw();}
+
+// ===== POSITION =====
 function getPos(e){const rect=canvas.getBoundingClientRect(); 
-if(e.touches){return {x:(e.touches[0].clientX-rect.left)/scale, y:(e.touches[0].clientY-rect.top)/scale};}
+if(e.touches) return {x:(e.touches[0].clientX-rect.left)/scale, y:(e.touches[0].clientY-rect.top)/scale};
 return {x:(e.clientX-rect.left)/scale, y:(e.clientY-rect.top)/scale};}
 
+// ===== DRAW EVENTS =====
 canvas.addEventListener('mousedown', startDraw);
 canvas.addEventListener('touchstart', startDraw);
 canvas.addEventListener('mousemove', drawMove);
@@ -83,89 +89,83 @@ canvas.addEventListener('touchend', endDraw);
 
 function startDraw(e){
     e.preventDefault();
-    const pos=getPos(e); startX=pos.x; startY=pos.y; lastPos=pos;
-    if(tool==='text'){addText(pos.x,pos.y); return;}
+    const pos=getPos(e); startX=pos.x; startY=pos.y;
     selectedObj=null;
-    for(let i=objects.length-1;i>=0;i--){const o=objects[i]; if(pos.x>o.x&&pos.x<o.x+o.w&&pos.y>o.y&&pos.y<o.y+o.h){selectedObj=o; offset.x=pos.x-o.x; offset.y=pos.y-o.y; return;}}
+    const objs=pages[currentPage].objects;
+    for(let i=objs.length-1;i>=0;i--){
+        const o=objs[i];
+        if(pos.x>o.x && pos.x<o.x+o.w && pos.y>o.y && pos.y<o.y+o.h){selectedObj=o; offset.x=pos.x-o.x; offset.y=pos.y-o.y; return;}
+    }
     saveState();
     drawing=true;
-    ctx.beginPath();
-    ctx.moveTo(pos.x,pos.y);
+
+    if(tool==='brush' || tool==='eraser'){
+        const c=tool==='eraser'?'white':color.value;
+        pages[currentPage].shapes.push({tool,color:c,size:size.value,points:[{x:startX,y:startY}]});
+    } else if(tool!=='text'){
+        pages[currentPage].shapes.push({tool,startX,startY,endX:startX,endY:startY,color:color.value,size:size.value});
+    } else{
+        const txt=prompt('Escribe tu texto:'); if(!txt) return;
+        pages[currentPage].objects.push({x:pos.x,y:pos.y,w:200,h:60,text:txt});
+        redraw();
+    }
 }
 
 function drawMove(e){
     e.preventDefault();
-    const pos=getPos(e);
-    if(selectedObj){selectedObj.x=pos.x-offset.x; selectedObj.y=pos.y-offset.y; redrawCanvas(); return;}
     if(!drawing) return;
-    if(tool==='brush'||tool==='eraser'){ctx.lineWidth=size.value; ctx.lineCap='round'; ctx.strokeStyle=tool==='eraser'?'white':color.value; ctx.lineTo(pos.x,pos.y); ctx.stroke(); ctx.beginPath(); ctx.moveTo(pos.x,pos.y);}
-    else{redrawLast(); previewShape(pos.x,pos.y);}
+    const pos=getPos(e);
+    if(selectedObj){selectedObj.x=pos.x-offset.x; selectedObj.y=pos.y-offset.y; redraw(); return;}
+    const shapes=pages[currentPage].shapes;
+    const s=shapes[shapes.length-1];
+    if(!s) return;
+    if(s.tool==='brush' || s.tool==='eraser'){s.points.push({x:pos.x,y:pos.y});}
+    else{s.endX=pos.x; s.endY=pos.y;}
+    redraw();
 }
 
-function endDraw(e){drawing=false; tempImage=null; selectedObj=null; ctx.beginPath();}
+function endDraw(e){drawing=false; selectedObj=null;}
 
-// ===== SHAPES =====
-function redrawLast(){if(!tempImage)return; ctx.clearRect(0,0,canvas.width,canvas.height); ctx.drawImage(tempImage,0,0); drawPanels(); drawObjects();}
-function previewShape(x,y){ctx.strokeStyle=color.value; 
-if(tool==='line'){ctx.beginPath(); ctx.moveTo(startX,startY); ctx.lineTo(x,y); ctx.stroke();}
-if(tool==='rect'){ctx.strokeRect(startX,startY,x-startX,y-startY);}
-if(tool==='circle'){let r=Math.sqrt((x-startX)**2+(y-startY)**2); ctx.beginPath(); ctx.arc(startX,startY,r,0,Math.PI*2); ctx.stroke();}
-if(tool==='cube'){let w=x-startX,h=y-startY,d=30; ctx.strokeRect(startX,startY,w,h); ctx.strokeRect(startX+d,startY-d,w,h); ctx.beginPath(); ctx.moveTo(startX,startY); ctx.lineTo(startX+d,startY-d); ctx.moveTo(startX+w,startY); ctx.lineTo(startX+w+d,startY-d); ctx.moveTo(startX,startY+h); ctx.lineTo(startX+d,startY+h-d); ctx.moveTo(startX+w,startY+h); ctx.lineTo(startX+w+d,startY+h-d); ctx.stroke();}}
-function drawShape(x,y){previewShape(x,y);}
+// ===== PAN/ZOOM =====
+canvas.addEventListener('wheel', e=>{e.preventDefault(); scale*=e.deltaY>0?0.9:1.1; redraw();});
 
-// ===== TEXT & GLOBOS =====
-function addText(x,y){
-    const txt=prompt('Escribe tu texto:'); if(!txt) return;
-    const w=200,h=60;
-    const obj={x,y,w,h,text:txt,type:'dialog'};
-    objects.push(obj);
-    redrawCanvas();
-}
-
-function drawObjects(){
-    for(const o of objects){
-        ctx.save(); ctx.fillStyle='white'; ctx.strokeStyle='black'; ctx.lineWidth=2;
-        ctx.beginPath(); ctx.roundRect(o.x,o.y,o.w,o.h,20); ctx.fill(); ctx.stroke();
-        ctx.fillStyle='black'; ctx.font='16px sans-serif'; wrapText(ctx,o.text,o.x+10,o.y+20,o.w-20,18);
-        ctx.restore();
-    }
-}
-
-function wrapText(ctx, text, x, y, maxWidth, lineHeight){
-    const words=text.split(' '); let line=''; for(let n=0;n<words.length;n++){let testLine=line+words[n]+' '; if(ctx.measureText(testLine).width>maxWidth && n>0){ctx.fillText(line,x,y); line=words[n]+' '; y+=lineHeight;}else{line=testLine;} ctx.fillText(line,x,y);}
-}
-
-// ===== PANEL DIVIDE =====
-function dividePage(n){
-    panels=[]; const panelW=canvas.width/n;
-    for(let i=0;i<n;i++){panels.push({x:i*panelW, y:0, w:panelW, h:canvas.height});}
-    redrawCanvas();
-}
-
-function drawPanels(){
-    ctx.save();
-    ctx.strokeStyle='black'; ctx.lineWidth=3;
-    for(const p of panels){ctx.strokeRect(p.x,p.y,p.w,p.h);}
-    ctx.restore();
-}
+// ===== PANELS =====
+function dividePage(n){const p=pages[currentPage]; p.panels=[]; const w=canvas.width/n; for(let i=0;i<n;i++){p.panels.push({x:i*w,y:0,w:w,h:canvas.height}); redraw();}}
 
 // ===== REDRAW =====
-function redrawCanvas(){ctx.clearRect(0,0,canvas.width,canvas.height); drawPanels(); drawObjects();}
+function redraw(){
+    ctx.setTransform(scale,0,0,scale,0,0); ctx.clearRect(0,0,canvas.width,canvas.height);
+    const p=pages[currentPage];
+    p.panels.forEach(pan=>{ctx.strokeStyle='black'; ctx.lineWidth=3; ctx.strokeRect(pan.x,pan.y,pan.w,pan.h);});
+    p.shapes.forEach(s=>{
+        ctx.strokeStyle=s.color; ctx.lineWidth=s.size; ctx.lineCap='round';
+        if(s.tool==='brush' || s.tool==='eraser'){ctx.beginPath(); ctx.moveTo(s.points[0].x,s.points[0].y); for(let i=1;i<s.points.length;i++){ctx.lineTo(s.points[i].x,s.points[i].y);} ctx.stroke();}
+        else if(s.tool==='line'){ctx.beginPath(); ctx.moveTo(s.startX,s.startY); ctx.lineTo(s.endX,s.endY); ctx.stroke();}
+        else if(s.tool==='rect'){ctx.strokeRect(s.startX,s.startY,s.endX-s.startX,s.endY-s.startY);}
+        else if(s.tool==='circle'){let r=Math.hypot(s.endX-s.startX,s.endY-s.startY); ctx.beginPath(); ctx.arc(s.startX,s.startY,r,0,2*Math.PI); ctx.stroke();}
+        else if(s.tool==='cube'){let w=s.endX-s.startX,h=s.endY-s.startY,d=30; ctx.strokeRect(s.startX,s.startY,w,h); ctx.strokeRect(s.startX+d,s.startY-d,w,h); ctx.beginPath(); ctx.moveTo(s.startX,s.startY); ctx.lineTo(s.startX+d,s.startY-d); ctx.moveTo(s.startX+w,s.startY); ctx.lineTo(s.startX+w+d,s.startY-d); ctx.moveTo(s.startX,s.startY+h); ctx.lineTo(s.startX+d,s.startY+h-d); ctx.moveTo(s.startX+w,s.startY+h); ctx.lineTo(s.startX+w+d,s.startY+h-d); ctx.stroke();}
+    });
+    p.objects.forEach(o=>{
+        ctx.save(); ctx.fillStyle='white'; ctx.strokeStyle='black'; ctx.lineWidth=2; ctx.beginPath(); ctx.roundRect(o.x,o.y,o.w,o.h,20); ctx.fill(); ctx.stroke();
+        ctx.fillStyle='black'; ctx.font='16px sans-serif'; wrapText(ctx,o.text,o.x+10,o.y+20,o.w-20,18); ctx.restore();
+    });
+}
 
-// ===== PAGES =====
-function addPage(){savePage(); const temp=document.createElement('canvas'); temp.width=canvas.width; temp.height=canvas.height; temp.getContext('2d').fillStyle='white'; temp.getContext('2d').fillRect(0,0,temp.width,temp.height); pages.push(temp); currentPage=pages.length-1; renderPages(); loadPage(currentPage);}
-function savePage(){if(!pages[currentPage])return; const temp=document.createElement('canvas'); temp.width=canvas.width; temp.height=canvas.height; temp.getContext('2d').drawImage(canvas,0,0); pages[currentPage]=temp;}
-function loadPage(index){ctx.clearRect(0,0,canvas.width,canvas.height); ctx.drawImage(pages[index],0,0); drawPanels(); drawObjects();}
-function renderPages(){pagesUI.innerHTML='';[...pages].reverse().forEach((p,rIndex)=>{const index=pages.length-1-rIndex; const thumb=document.createElement('canvas'); thumb.width=80; thumb.height=100; thumb.className='thumb'; if(index===currentPage) thumb.classList.add('active'); thumb.getContext('2d').drawImage(p,0,0,80,100); thumb.onclick=()=>{savePage(); currentPage=index; loadPage(index); renderPages();}; pagesUI.appendChild(thumb);});}
-function nextPage(){if(currentPage<pages.length-1){savePage(); currentPage++; loadPage(currentPage); renderPages();}}
-function prevPage(){if(currentPage>0){savePage(); currentPage--; loadPage(currentPage); renderPages();}}
+// ===== TEXT WRAP =====
+function wrapText(ctx,text,x,y,maxWidth,lineHeight){let words=text.split(' '),line=''; for(let n=0;n<words.length;n++){let testLine=line+words[n]+' '; if(ctx.measureText(testLine).width>maxWidth && n>0){ctx.fillText(line,x,y); line=words[n]+' '; y+=lineHeight;}else{line=testLine;} ctx.fillText(line,x,y);}}
 
-// ===== CLEAR & SAVE =====
-function clearPage(){saveState(); ctx.fillStyle='white'; ctx.fillRect(0,0,canvas.width,canvas.height); objects=[]; panels=[];}
+// ===== PAGES UI =====
+function renderPages(){pagesUI.innerHTML=''; pages.forEach((p,i)=>{const thumb=document.createElement('canvas'); thumb.width=80; thumb.height=100; thumb.className='thumb'; if(i===currentPage)thumb.classList.add('active'); thumb.getContext('2d').drawImage(canvas,0,0,80,100); thumb.onclick=()=>{currentPage=i; redraw(); renderPages();}; pagesUI.appendChild(thumb);});}
+function addPage(){pages.push(createPage()); currentPage=pages.length-1; redraw(); renderPages();}
+function nextPage(){if(currentPage<pages.length-1){currentPage++; redraw(); renderPages();}}
+function prevPage(){if(currentPage>0){currentPage--; redraw(); renderPages();}}
+
+// ===== CLEAR / SAVE =====
+function clearPage(){saveState(); pages[currentPage].shapes=[]; pages[currentPage].objects=[]; pages[currentPage].panels=[]; redraw();}
 function saveImage(){let link=document.createElement('a'); link.download='MangaFlan.png'; link.href=canvas.toDataURL(); link.click();}
 
-// ===== START =====
-addPage();
+renderPages();
+redraw();
 </script>
 </body>
 </html>
